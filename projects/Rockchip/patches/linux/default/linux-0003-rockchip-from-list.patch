@@ -1,0 +1,807 @@
+From 8e407d58ba31a8b355abb457e065166ec92d29ad Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 17 Feb 2019 22:14:38 +0000
+Subject: [PATCH] mmc: core: set initial signal voltage on power off
+
+Some boards have SD card connectors where the power rail cannot be switched
+off by the driver. If the card has not been power cycled, it may still be
+using 1.8V signaling after a warm re-boot. Bootroms expecting 3.3V signaling
+will fail to boot from a UHS card that continue to use 1.8V signaling.
+
+Set initial signal voltage in mmc_power_off() to allow re-boot to function.
+
+This fixes re-boot with UHS cards on Asus Tinker Board (Rockchip RK3288),
+same issue have been seen on some Rockchip RK3399 boards.
+
+I am sending this as a RFC because I have no insights into SD/MMC subsystem,
+this change fix a re-boot issue on my boards and does not break emmc/sdio.
+Is this an acceptable workaround? Any advice is appreciated.
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ drivers/mmc/core/core.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/drivers/mmc/core/core.c b/drivers/mmc/core/core.c
+index 221127324709..f00bd82d869b 100644
+--- a/drivers/mmc/core/core.c
++++ b/drivers/mmc/core/core.c
+@@ -1366,6 +1366,14 @@ void mmc_power_off(struct mmc_host *host)
+ 	if (host->ios.power_mode == MMC_POWER_OFF)
+ 		return;
+ 
++	mmc_set_initial_signal_voltage(host);
++
++	/*
++	 * This delay should be sufficient to allow the power supply
++	 * to reach the minimum voltage.
++	 */
++	mmc_delay(host->ios.power_delay_ms);
++
+ 	mmc_pwrseq_power_off(host);
+ 
+ 	host->ios.clock = 0;
+
+From 7f3620d8d06504e7994c537b6f5836c12bcd5f0f Mon Sep 17 00:00:00 2001
+From: Katsuhiro Suzuki <katsuhiro@katsuster.net>
+Date: Mon, 18 Feb 2019 02:34:07 +0900
+Subject: [PATCH] arm64: dts: rockchip: add HDMI sound node for rk3328-rock64
+
+This patch adds HDMI sound (I2S0) node for rock64.
+
+After apply this patch, UART2 will fail to allocate DMA resources
+but UART driver can work fine without DMA.
+
+This error is related to the DMAC of rk3328 (pl330 or compatible).
+DMAC connected to 16 DMA sources. Each sources have ID number that is
+called 'Req number' in rk3328 TRM. Currently total 7 sources has been
+activated as follows:
+
+| Req number | Source | Required  |
+|            |        | channels  |
+|------------+--------+-----------|
+| 14, 15     | I2S1   | 2ch       |
+|  6,  7     | UART2  | 2ch       |
+|     10     | SPDIF  | 1ch       |
+|  8,  9     | SPI0   | 2ch       |
+|------------+--------+-----------|
+|            | Total  | 7ch       |
+
+HDMI audio needs to activate new source I2S0 (Req number 11 and 12).
+I2S0 can work concurrently with other sources, but rk3328 DMAC can
+use max 8 channels at same time. If I2S0 is simply activated by this
+patch, required DMAC channels will be 9. So last one (UART2) cannot
+allocate the DMA resources.
+
+Virt-dma mechanism for pl0330 DMAC driver is needed to fix this
+problem.
+
+Signed-off-by: Katsuhiro Suzuki <katsuhiro@katsuster.net>
+---
+ arch/arm64/boot/dts/rockchip/rk3328-rock64.dts | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3328-rock64.dts b/arch/arm64/boot/dts/rockchip/rk3328-rock64.dts
+index 62936b432f9a..7acc2935899a 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3328-rock64.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3328-rock64.dts
+@@ -87,7 +87,8 @@
+ 	sound {
+ 		compatible = "audio-graph-card";
+ 		label = "rockchip,rk3328";
+-		dais = <&i2s1_p0
++		dais = <&i2s0_p0
++			&i2s1_p0
+ 			&spdif_p0>;
+ 	};
+ 
+@@ -160,6 +161,12 @@
+ 
+ &hdmi {
+ 	status = "okay";
++
++	port@0 {
++		hdmi_p0_0: endpoint {
++			remote-endpoint = <&i2s0_p0_0>;
++		};
++	};
+ };
+ 
+ &hdmiphy {
+@@ -277,6 +284,18 @@
+ 	};
+ };
+ 
++&i2s0 {
++	status = "okay";
++
++	i2s0_p0: port {
++		i2s0_p0_0: endpoint {
++			dai-format = "i2s";
++			mclk-fs = <256>;
++			remote-endpoint = <&hdmi_p0_0>;
++		};
++	};
++};
++
+ &i2s1 {
+ 	status = "okay";
+ 
+
+From 5fc8c1a0a668edb37f51c5e747441ccb09fb0497 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Mon, 18 Feb 2019 20:17:40 +0000
+Subject: [PATCH] [media] rc/keymaps: add keytable for Pine64 IR Remote
+ Controller
+
+This RC map is based on remote key schema at [1], the mouse button key
+did not have an obvious target and was mapped to KEY_CONTEXT_MENU.
+
+[1] http://files.pine64.org/doc/Pine%20A64%20Schematic/remote-wit-logo.jpg
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ drivers/media/rc/keymaps/Makefile    |  1 +
+ drivers/media/rc/keymaps/rc-pine64.c | 59 ++++++++++++++++++++++++++++++++++++
+ include/media/rc-map.h               |  1 +
+ 3 files changed, 61 insertions(+)
+ create mode 100644 drivers/media/rc/keymaps/rc-pine64.c
+
+diff --git a/drivers/media/rc/keymaps/Makefile b/drivers/media/rc/keymaps/Makefile
+index 5b1399af6b3a..0ea52f65bb03 100644
+--- a/drivers/media/rc/keymaps/Makefile
++++ b/drivers/media/rc/keymaps/Makefile
+@@ -76,6 +76,7 @@ obj-$(CONFIG_RC_MAP) += rc-adstech-dvb-t-pci.o \
+ 			rc-norwood.o \
+ 			rc-npgtech.o \
+ 			rc-pctv-sedna.o \
++			rc-pine64.o \
+ 			rc-pinnacle-color.o \
+ 			rc-pinnacle-grey.o \
+ 			rc-pinnacle-pctv-hd.o \
+diff --git a/drivers/media/rc/keymaps/rc-pine64.c b/drivers/media/rc/keymaps/rc-pine64.c
+new file mode 100644
+index 000000000000..94e5624f63f4
+--- /dev/null
++++ b/drivers/media/rc/keymaps/rc-pine64.c
+@@ -0,0 +1,59 @@
++// SPDX-License-Identifier: GPL-2.0+
++// Keytable for Pine64 IR Remote Controller
++// Copyright (c) 2017 Jonas Karlman
++
++#include <media/rc-map.h>
++#include <linux/module.h>
++
++static struct rc_map_table pine64[] = {
++	{ 0x404000, KEY_NUMERIC_0 },
++	{ 0x404001, KEY_NUMERIC_1 },
++	{ 0x404002, KEY_NUMERIC_2 },
++	{ 0x404003, KEY_NUMERIC_3 },
++	{ 0x404004, KEY_NUMERIC_4 },
++	{ 0x404005, KEY_NUMERIC_5 },
++	{ 0x404006, KEY_NUMERIC_6 },
++	{ 0x404007, KEY_NUMERIC_7 },
++	{ 0x404008, KEY_NUMERIC_8 },
++	{ 0x404009, KEY_NUMERIC_9 },
++	{ 0x40400a, KEY_MUTE },
++	{ 0x40400b, KEY_UP },
++	{ 0x40400c, KEY_BACKSPACE },
++	{ 0x40400d, KEY_OK },
++	{ 0x40400e, KEY_DOWN },
++	{ 0x404010, KEY_LEFT },
++	{ 0x404011, KEY_RIGHT },
++	{ 0x404017, KEY_VOLUMEDOWN },
++	{ 0x404018, KEY_VOLUMEUP },
++	{ 0x40401a, KEY_HOME },
++	{ 0x40401d, KEY_MENU },
++	{ 0x40401f, KEY_WWW },
++	{ 0x404045, KEY_BACK },
++	{ 0x404047, KEY_CONTEXT_MENU },
++	{ 0x40404d, KEY_POWER },
++};
++
++static struct rc_map_list pine64_map = {
++	.map = {
++		.scan     = pine64,
++		.size     = ARRAY_SIZE(pine64),
++		.rc_proto = RC_PROTO_NECX,
++		.name     = RC_MAP_PINE64,
++	}
++};
++
++static int __init init_rc_map_pine64(void)
++{
++	return rc_map_register(&pine64_map);
++}
++
++static void __exit exit_rc_map_pine64(void)
++{
++	rc_map_unregister(&pine64_map);
++}
++
++module_init(init_rc_map_pine64)
++module_exit(exit_rc_map_pine64)
++
++MODULE_LICENSE("GPL");
++MODULE_AUTHOR("Jonas Karlman");
+diff --git a/include/media/rc-map.h b/include/media/rc-map.h
+index bebd3c4c6338..1b39ccae5929 100644
+--- a/include/media/rc-map.h
++++ b/include/media/rc-map.h
+@@ -242,6 +242,7 @@ struct rc_map *rc_map_get(const char *name);
+ #define RC_MAP_NORWOOD                   "rc-norwood"
+ #define RC_MAP_NPGTECH                   "rc-npgtech"
+ #define RC_MAP_PCTV_SEDNA                "rc-pctv-sedna"
++#define RC_MAP_PINE64                    "rc-pine64"
+ #define RC_MAP_PINNACLE_COLOR            "rc-pinnacle-color"
+ #define RC_MAP_PINNACLE_GREY             "rc-pinnacle-grey"
+ #define RC_MAP_PINNACLE_PCTV_HD          "rc-pinnacle-pctv-hd"
+
+From 7fa711a1632c31692c140c243e3275d6db328e4a Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Wed, 7 Aug 2019 15:11:23 +0000
+Subject: [PATCH] ASoC: hdmi-codec: reorder channel allocation list
+
+Wrong channel allocation is selected by hdmi_codec_get_ch_alloc_table_idx().
+
+E.g when ELD reports FL|FR|LFE|FC|RL|RR or FL|FR|LFE|FC|RL|RR|RC|RLC|RRC
+
+ca_id 0x01 with speaker mask FL|FR|LFE gets selected instead of
+ca_id 0x03 with speaker mask FL|FR|LFE|FC for 4 channels
+
+and
+
+ca_id 0x04 with speaker mask FL|FR|RC gets selected instead of
+ca_id 0x0b with speaker mask FL|FR|LFE|FC|RL|RR for 6 channels
+
+Fix this by reorder the channel allocation list with
+most specific speaker mask at the top.
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ sound/soc/codecs/hdmi-codec.c | 115 +++++++++++++++++++-----------------------
+ 1 file changed, 53 insertions(+), 62 deletions(-)
+
+diff --git a/sound/soc/codecs/hdmi-codec.c b/sound/soc/codecs/hdmi-codec.c
+index b5fd8f08726e..d96e0a456ee5 100644
+--- a/sound/soc/codecs/hdmi-codec.c
++++ b/sound/soc/codecs/hdmi-codec.c
+@@ -189,84 +189,75 @@ static const struct snd_pcm_chmap_elem hdmi_codec_8ch_chmaps[] = {
+ /*
+  * hdmi_codec_channel_alloc: speaker configuration available for CEA
+  *
+- * This is an ordered list that must match with hdmi_codec_8ch_chmaps struct
++ * This is an ordered list where ca_id must exist in hdmi_codec_8ch_chmaps
+  * The preceding ones have better chances to be selected by
+  * hdmi_codec_get_ch_alloc_table_idx().
+  */
+ static const struct hdmi_codec_cea_spk_alloc hdmi_codec_channel_alloc[] = {
+ 	{ .ca_id = 0x00, .n_ch = 2,
+-	  .mask = FL | FR},
+-	/* 2.1 */
+-	{ .ca_id = 0x01, .n_ch = 4,
+-	  .mask = FL | FR | LFE},
+-	/* Dolby Surround */
++	  .mask = FL | FR },
++	{ .ca_id = 0x03, .n_ch = 4,
++	  .mask = FL | FR | LFE | FC },
+ 	{ .ca_id = 0x02, .n_ch = 4,
+ 	  .mask = FL | FR | FC },
+-	/* surround51 */
++	{ .ca_id = 0x01, .n_ch = 4,
++	  .mask = FL | FR | LFE },
+ 	{ .ca_id = 0x0b, .n_ch = 6,
+-	  .mask = FL | FR | LFE | FC | RL | RR},
+-	/* surround40 */
+-	{ .ca_id = 0x08, .n_ch = 6,
+-	  .mask = FL | FR | RL | RR },
+-	/* surround41 */
+-	{ .ca_id = 0x09, .n_ch = 6,
+-	  .mask = FL | FR | LFE | RL | RR },
+-	/* surround50 */
++	  .mask = FL | FR | LFE | FC | RL | RR },
+ 	{ .ca_id = 0x0a, .n_ch = 6,
+ 	  .mask = FL | FR | FC | RL | RR },
+-	/* 6.1 */
+-	{ .ca_id = 0x0f, .n_ch = 8,
+-	  .mask = FL | FR | LFE | FC | RL | RR | RC },
+-	/* surround71 */
++	{ .ca_id = 0x09, .n_ch = 6,
++	  .mask = FL | FR | LFE | RL | RR },
++	{ .ca_id = 0x08, .n_ch = 6,
++	  .mask = FL | FR | RL | RR },
++	{ .ca_id = 0x07, .n_ch = 6,
++	  .mask = FL | FR | LFE | FC | RC },
++	{ .ca_id = 0x06, .n_ch = 6,
++	  .mask = FL | FR | FC | RC },
++	{ .ca_id = 0x05, .n_ch = 6,
++	  .mask = FL | FR | LFE | RC },
++	{ .ca_id = 0x04, .n_ch = 6,
++	  .mask = FL | FR | RC },
+ 	{ .ca_id = 0x13, .n_ch = 8,
+ 	  .mask = FL | FR | LFE | FC | RL | RR | RLC | RRC },
+-	/* others */
+-	{ .ca_id = 0x03, .n_ch = 8,
+-	  .mask = FL | FR | LFE | FC },
+-	{ .ca_id = 0x04, .n_ch = 8,
+-	  .mask = FL | FR | RC},
+-	{ .ca_id = 0x05, .n_ch = 8,
+-	  .mask = FL | FR | LFE | RC },
+-	{ .ca_id = 0x06, .n_ch = 8,
+-	  .mask = FL | FR | FC | RC },
+-	{ .ca_id = 0x07, .n_ch = 8,
+-	  .mask = FL | FR | LFE | FC | RC },
+-	{ .ca_id = 0x0c, .n_ch = 8,
+-	  .mask = FL | FR | RC | RL | RR },
+-	{ .ca_id = 0x0d, .n_ch = 8,
+-	  .mask = FL | FR | LFE | RL | RR | RC },
+-	{ .ca_id = 0x0e, .n_ch = 8,
+-	  .mask = FL | FR | FC | RL | RR | RC },
+-	{ .ca_id = 0x10, .n_ch = 8,
+-	  .mask = FL | FR | RL | RR | RLC | RRC },
+-	{ .ca_id = 0x11, .n_ch = 8,
+-	  .mask = FL | FR | LFE | RL | RR | RLC | RRC },
++	{ .ca_id = 0x1f, .n_ch = 8,
++	  .mask = FL | FR | LFE | FC | RL | RR | FLC | FRC },
+ 	{ .ca_id = 0x12, .n_ch = 8,
+ 	  .mask = FL | FR | FC | RL | RR | RLC | RRC },
+-	{ .ca_id = 0x14, .n_ch = 8,
+-	  .mask = FL | FR | FLC | FRC },
+-	{ .ca_id = 0x15, .n_ch = 8,
+-	  .mask = FL | FR | LFE | FLC | FRC },
+-	{ .ca_id = 0x16, .n_ch = 8,
+-	  .mask = FL | FR | FC | FLC | FRC },
+-	{ .ca_id = 0x17, .n_ch = 8,
+-	  .mask = FL | FR | LFE | FC | FLC | FRC },
+-	{ .ca_id = 0x18, .n_ch = 8,
+-	  .mask = FL | FR | RC | FLC | FRC },
+-	{ .ca_id = 0x19, .n_ch = 8,
+-	  .mask = FL | FR | LFE | RC | FLC | FRC },
+-	{ .ca_id = 0x1a, .n_ch = 8,
+-	  .mask = FL | FR | RC | FC | FLC | FRC },
+-	{ .ca_id = 0x1b, .n_ch = 8,
+-	  .mask = FL | FR | LFE | RC | FC | FLC | FRC },
+-	{ .ca_id = 0x1c, .n_ch = 8,
+-	  .mask = FL | FR | RL | RR | FLC | FRC },
+-	{ .ca_id = 0x1d, .n_ch = 8,
+-	  .mask = FL | FR | LFE | RL | RR | FLC | FRC },
+ 	{ .ca_id = 0x1e, .n_ch = 8,
+ 	  .mask = FL | FR | FC | RL | RR | FLC | FRC },
+-	{ .ca_id = 0x1f, .n_ch = 8,
+-	  .mask = FL | FR | LFE | FC | RL | RR | FLC | FRC },
++	{ .ca_id = 0x11, .n_ch = 8,
++	  .mask = FL | FR | LFE | RL | RR | RLC | RRC },
++	{ .ca_id = 0x1d, .n_ch = 8,
++	  .mask = FL | FR | LFE | RL | RR | FLC | FRC },
++	{ .ca_id = 0x10, .n_ch = 8,
++	  .mask = FL | FR | RL | RR | RLC | RRC },
++	{ .ca_id = 0x1c, .n_ch = 8,
++	  .mask = FL | FR | RL | RR | FLC | FRC },
++	{ .ca_id = 0x0f, .n_ch = 8,
++	  .mask = FL | FR | LFE | FC | RL | RR | RC },
++	{ .ca_id = 0x1b, .n_ch = 8,
++	  .mask = FL | FR | LFE | RC | FC | FLC | FRC },
++	{ .ca_id = 0x0e, .n_ch = 8,
++	  .mask = FL | FR | FC | RL | RR | RC },
++	{ .ca_id = 0x1a, .n_ch = 8,
++	  .mask = FL | FR | RC | FC | FLC | FRC },
++	{ .ca_id = 0x0d, .n_ch = 8,
++	  .mask = FL | FR | LFE | RL | RR | RC },
++	{ .ca_id = 0x19, .n_ch = 8,
++	  .mask = FL | FR | LFE | RC | FLC | FRC },
++	{ .ca_id = 0x0c, .n_ch = 8,
++	  .mask = FL | FR | RC | RL | RR },
++	{ .ca_id = 0x18, .n_ch = 8,
++	  .mask = FL | FR | RC | FLC | FRC },
++	{ .ca_id = 0x17, .n_ch = 8,
++	  .mask = FL | FR | LFE | FC | FLC | FRC },
++	{ .ca_id = 0x16, .n_ch = 8,
++	  .mask = FL | FR | FC | FLC | FRC },
++	{ .ca_id = 0x15, .n_ch = 8,
++	  .mask = FL | FR | LFE | FLC | FRC },
++	{ .ca_id = 0x14, .n_ch = 8,
++	  .mask = FL | FR | FLC | FRC },
+ };
+ 
+ struct hdmi_codec_priv {
+
+From f88c94458bb64137dea18c08bef7a61c160d029a Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 1 Sep 2019 16:14:38 +0000
+Subject: [PATCH] drm: dw-hdmi: extract dw_hdmi_connector_update_edid()
+
+Extract code that updates EDID into a dw_hdmi_connector_update_edid()
+helper, it will be called from dw_hdmi_connector_detect().
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ drivers/gpu/drm/bridge/synopsys/dw-hdmi.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+index 4bae6676229c..6a1671691347 100644
+--- a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
++++ b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+@@ -2192,7 +2192,8 @@ dw_hdmi_connector_detect(struct drm_connector *connector, bool force)
+ 	return hdmi->phy.ops->read_hpd(hdmi, hdmi->phy.data);
+ }
+ 
+-static int dw_hdmi_connector_get_modes(struct drm_connector *connector)
++static int dw_hdmi_connector_update_edid(struct drm_connector *connector,
++					  bool add_modes)
+ {
+ 	struct dw_hdmi *hdmi = container_of(connector, struct dw_hdmi,
+ 					     connector);
+@@ -2211,7 +2212,8 @@ static int dw_hdmi_connector_get_modes(struct drm_connector *connector)
+ 		hdmi->sink_has_audio = drm_detect_monitor_audio(edid);
+ 		drm_connector_update_edid_property(connector, edid);
+ 		cec_notifier_set_phys_addr_from_edid(hdmi->cec_notifier, edid);
+-		ret = drm_add_edid_modes(connector, edid);
++		if (add_modes)
++			ret = drm_add_edid_modes(connector, edid);
+ 		kfree(edid);
+ 	} else {
+ 		dev_dbg(hdmi->dev, "failed to get edid\n");
+@@ -2220,6 +2222,11 @@ static int dw_hdmi_connector_get_modes(struct drm_connector *connector)
+ 	return ret;
+ }
+ 
++static int dw_hdmi_connector_get_modes(struct drm_connector *connector)
++{
++	return dw_hdmi_connector_update_edid(connector, true);
++}
++
+ static void dw_hdmi_connector_force(struct drm_connector *connector)
+ {
+ 	struct dw_hdmi *hdmi = container_of(connector, struct dw_hdmi,
+
+From de95fba943232cd0a8d539df6256cfadba901442 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 1 Sep 2019 16:14:39 +0000
+Subject: [PATCH] drm: dw-hdmi: move dw_hdmi_connector_detect()
+
+Move dw_hdmi_connector_detect() it will call dw_hdmi_connector_update_edid().
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ drivers/gpu/drm/bridge/synopsys/dw-hdmi.c | 30 +++++++++++++++---------------
+ 1 file changed, 15 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+index 6a1671691347..2a4083c94f6a 100644
+--- a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
++++ b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+@@ -2177,21 +2177,6 @@ static void dw_hdmi_update_phy_mask(struct dw_hdmi *hdmi)
+ 					  hdmi->rxsense);
+ }
+ 
+-static enum drm_connector_status
+-dw_hdmi_connector_detect(struct drm_connector *connector, bool force)
+-{
+-	struct dw_hdmi *hdmi = container_of(connector, struct dw_hdmi,
+-					     connector);
+-
+-	mutex_lock(&hdmi->mutex);
+-	hdmi->force = DRM_FORCE_UNSPECIFIED;
+-	dw_hdmi_update_power(hdmi);
+-	dw_hdmi_update_phy_mask(hdmi);
+-	mutex_unlock(&hdmi->mutex);
+-
+-	return hdmi->phy.ops->read_hpd(hdmi, hdmi->phy.data);
+-}
+-
+ static int dw_hdmi_connector_update_edid(struct drm_connector *connector,
+ 					  bool add_modes)
+ {
+@@ -2222,6 +2207,21 @@ static int dw_hdmi_connector_update_edid(struct drm_connector *connector,
+ 	return ret;
+ }
+ 
++static enum drm_connector_status
++dw_hdmi_connector_detect(struct drm_connector *connector, bool force)
++{
++	struct dw_hdmi *hdmi = container_of(connector, struct dw_hdmi,
++					     connector);
++
++	mutex_lock(&hdmi->mutex);
++	hdmi->force = DRM_FORCE_UNSPECIFIED;
++	dw_hdmi_update_power(hdmi);
++	dw_hdmi_update_phy_mask(hdmi);
++	mutex_unlock(&hdmi->mutex);
++
++	return hdmi->phy.ops->read_hpd(hdmi, hdmi->phy.data);
++}
++
+ static int dw_hdmi_connector_get_modes(struct drm_connector *connector)
+ {
+ 	return dw_hdmi_connector_update_edid(connector, true);
+
+From e3648c5a0ea2861da020bbba507379ed4cf114d5 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 1 Sep 2019 16:14:40 +0000
+Subject: [PATCH] drm: dw-hdmi: update CEC phys addr and EDID on HPD event
+
+Update CEC phys addr and EDID on HPD event, fixes lost CEC phys addr and
+stale EDID when HDMI cable is unplugged/replugged or AVR is powered on/off.
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ drivers/gpu/drm/bridge/synopsys/dw-hdmi.c | 16 +++++++++-------
+ 1 file changed, 9 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+index 2a4083c94f6a..1f0d055ba444 100644
+--- a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
++++ b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+@@ -2210,6 +2210,7 @@ static int dw_hdmi_connector_update_edid(struct drm_connector *connector,
+ static enum drm_connector_status
+ dw_hdmi_connector_detect(struct drm_connector *connector, bool force)
+ {
++	enum drm_connector_status status;
+ 	struct dw_hdmi *hdmi = container_of(connector, struct dw_hdmi,
+ 					     connector);
+ 
+@@ -2219,7 +2220,14 @@ dw_hdmi_connector_detect(struct drm_connector *connector, bool force)
+ 	dw_hdmi_update_phy_mask(hdmi);
+ 	mutex_unlock(&hdmi->mutex);
+ 
+-	return hdmi->phy.ops->read_hpd(hdmi, hdmi->phy.data);
++	status = hdmi->phy.ops->read_hpd(hdmi, hdmi->phy.data);
++
++	if (status == connector_status_connected)
++		dw_hdmi_connector_update_edid(connector, false);
++	else
++		cec_notifier_phys_addr_invalidate(hdmi->cec_notifier);
++
++	return status;
+ }
+ 
+ static int dw_hdmi_connector_get_modes(struct drm_connector *connector)
+@@ -2457,12 +2465,6 @@ static irqreturn_t dw_hdmi_irq(int irq, void *dev_id)
+ 		dw_hdmi_setup_rx_sense(hdmi,
+ 				       phy_stat & HDMI_PHY_HPD,
+ 				       phy_stat & HDMI_PHY_RX_SENSE);
+-
+-		if ((phy_stat & (HDMI_PHY_RX_SENSE | HDMI_PHY_HPD)) == 0) {
+-			mutex_lock(&hdmi->cec_notifier_mutex);
+-			cec_notifier_phys_addr_invalidate(hdmi->cec_notifier);
+-			mutex_unlock(&hdmi->cec_notifier_mutex);
+-		}
+ 	}
+ 
+ 	if (intr_stat & HDMI_IH_PHY_STAT0_HPD) {
+
+From 1c14b17c814597c9d4cd919f94801f757c28eeb1 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 1 Sep 2019 16:14:41 +0000
+Subject: [PATCH] Revert "drm/edid: make drm_edid_to_eld() static"
+
+drm_edid_to_eld() is needed to update stale connector ELD on HPD event.
+
+This reverts part of commit 79436a1c9bcc ("drm/edid: make drm_edid_to_eld() static").
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ drivers/gpu/drm/drm_edid.c | 5 +++--
+ include/drm/drm_edid.h     | 1 +
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/drm_edid.c b/drivers/gpu/drm/drm_edid.c
+index 82a4ceed3fcf..47c409af0903 100644
+--- a/drivers/gpu/drm/drm_edid.c
++++ b/drivers/gpu/drm/drm_edid.c
+@@ -4069,7 +4069,7 @@ static void clear_eld(struct drm_connector *connector)
+ 	connector->audio_latency[1] = 0;
+ }
+ 
+-/*
++/**
+  * drm_edid_to_eld - build ELD from EDID
+  * @connector: connector corresponding to the HDMI/DP sink
+  * @edid: EDID to parse
+@@ -4077,7 +4077,7 @@ static void clear_eld(struct drm_connector *connector)
+  * Fill the ELD (EDID-Like Data) buffer for passing to the audio driver. The
+  * HDCP and Port_ID ELD fields are left for the graphics driver to fill in.
+  */
+-static void drm_edid_to_eld(struct drm_connector *connector, struct edid *edid)
++void drm_edid_to_eld(struct drm_connector *connector, struct edid *edid)
+ {
+ 	uint8_t *eld = connector->eld;
+ 	u8 *cea;
+@@ -4162,6 +4162,7 @@ static void drm_edid_to_eld(struct drm_connector *connector, struct edid *edid)
+ 	DRM_DEBUG_KMS("ELD size %d, SAD count %d\n",
+ 		      drm_eld_size(eld), total_sad_count);
+ }
++EXPORT_SYMBOL(drm_edid_to_eld);
+ 
+ /**
+  * drm_edid_to_sad - extracts SADs from EDID
+diff --git a/include/drm/drm_edid.h b/include/drm/drm_edid.h
+index b9719418c3d2..49987818fe23 100644
+--- a/include/drm/drm_edid.h
++++ b/include/drm/drm_edid.h
+@@ -337,6 +337,7 @@ struct drm_connector;
+ struct drm_connector_state;
+ struct drm_display_mode;
+ 
++void drm_edid_to_eld(struct drm_connector *connector, struct edid *edid);
+ int drm_edid_to_sad(struct edid *edid, struct cea_sad **sads);
+ int drm_edid_to_speaker_allocation(struct edid *edid, u8 **sadb);
+ int drm_av_sync_delay(struct drm_connector *connector,
+
+From 08ab161a97d253464f15cbde93cf32b2f1427be2 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 1 Sep 2019 16:14:43 +0000
+Subject: [PATCH] drm: dw-hdmi: update ELD on HPD event
+
+Update connector ELD on HPD event, fixes stale ELD when
+HDMI cable is unplugged/replugged or AVR is powered on/off.
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ drivers/gpu/drm/bridge/synopsys/dw-hdmi.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+index 1f0d055ba444..c561770ccee4 100644
+--- a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
++++ b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+@@ -2199,6 +2199,8 @@ static int dw_hdmi_connector_update_edid(struct drm_connector *connector,
+ 		cec_notifier_set_phys_addr_from_edid(hdmi->cec_notifier, edid);
+ 		if (add_modes)
+ 			ret = drm_add_edid_modes(connector, edid);
++		else
++			drm_edid_to_eld(connector, edid);
+ 		kfree(edid);
+ 	} else {
+ 		dev_dbg(hdmi->dev, "failed to get edid\n");
+
+From 91a16abb66a2ce7aee92fe687d97af699ef27127 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 1 Sep 2019 19:45:38 +0000
+Subject: [PATCH] media: cec-notifier: debounce reporing of invalid phys addr
+
+When EDID is refreshed, HDMI cable is unplugged/replugged or
+an AVR is power cycled the CEC phys addr gets invalidated.
+
+This can cause some disruption of CEC communication when
+adapter is being reconfigured.
+
+Add a debounce option that can be used to debounce setting
+an invalid phys addr.
+
+Power off AVR (debounce = 0):
+[  101.536866] cec-dw_hdmi: new physical address f.f.f.f
+[  102.495686] cec-dw_hdmi: new physical address 2.1.0.0
+[  102.495913] cec-dw_hdmi: physical address: 2.1.0.0, claim 1 logical addresses
+[  102.628574] cec-dw_hdmi: config: la 1 pa 2.1.0.0
+[  105.130115] cec-dw_hdmi: new physical address f.f.f.f
+[  106.979705] cec-dw_hdmi: new physical address 2.1.0.0
+[  106.979872] cec-dw_hdmi: physical address: 2.1.0.0, claim 1 logical addresses
+[  107.112399] cec-dw_hdmi: config: la 1 pa 2.1.0.0
+[  108.979408] cec-dw_hdmi: reported physical address 2.0.0.0 for logical address 5
+[  109.205386] cec-dw_hdmi: reported physical address 2.0.0.0 for logical address 11
+
+Power on AVR (debounce = 0):
+[  158.398447] cec-dw_hdmi: new physical address f.f.f.f
+[  161.977714] cec-dw_hdmi: new physical address 2.1.0.0
+[  161.978766] cec-dw_hdmi: physical address: 2.1.0.0, claim 1 logical addresses
+[  162.115624] cec-dw_hdmi: config: la 1 pa 2.1.0.0
+[  162.402750] cec-dw_hdmi: new physical address f.f.f.f
+[  162.403389] cec-dw_hdmi: cec_transmit_msg_fh: adapter is unconfigured
+[  162.886757] cec-dw_hdmi: new physical address 2.1.0.0
+[  162.886964] cec-dw_hdmi: physical address: 2.1.0.0, claim 1 logical addresses
+[  163.510725] cec-dw_hdmi: config: la 1 pa 2.1.0.0
+[  173.034200] cec-dw_hdmi: message 10 89 02 05 timed out
+
+Power off AVR (debounce = 5000):
+[  251.720471] cec-dw_hdmi: reported physical address 2.0.0.0 for logical address 5
+[  251.922432] cec-dw_hdmi: reported physical address 2.0.0.0 for logical address 11
+
+Power on AVR (debounce = 5000):
+[  291.154262] cec-dw_hdmi: reported physical address 2.0.0.0 for logical address 5
+[  291.296199] cec-dw_hdmi: reported physical address 2.0.0.0 for logical address 11
+
+Using a debounce of 5000 ms reconfiguring can be avoided.
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ drivers/media/cec/cec-core.c     |  4 ++++
+ drivers/media/cec/cec-notifier.c | 23 ++++++++++++++++++++++-
+ drivers/media/cec/cec-priv.h     |  1 +
+ 3 files changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/media/cec/cec-core.c b/drivers/media/cec/cec-core.c
+index 9c610e1e99b8..c5094fd9b664 100644
+--- a/drivers/media/cec/cec-core.c
++++ b/drivers/media/cec/cec-core.c
+@@ -28,6 +28,10 @@ static bool debug_phys_addr;
+ module_param(debug_phys_addr, bool, 0644);
+ MODULE_PARM_DESC(debug_phys_addr, "add CEC_CAP_PHYS_ADDR if set");
+ 
++int cec_debounce;
++module_param_named(debounce, cec_debounce, int, 0644);
++MODULE_PARM_DESC(debounce, "debounce invalid phys addr");
++
+ static dev_t cec_dev_t;
+ 
+ /* Active devices */
+diff --git a/drivers/media/cec/cec-notifier.c b/drivers/media/cec/cec-notifier.c
+index 4d82a5522072..0157d468cfe4 100644
+--- a/drivers/media/cec/cec-notifier.c
++++ b/drivers/media/cec/cec-notifier.c
+@@ -12,11 +12,14 @@
+ #include <linux/list.h>
+ #include <linux/kref.h>
+ #include <linux/of_platform.h>
++#include <linux/workqueue.h>
+ 
+ #include <media/cec.h>
+ #include <media/cec-notifier.h>
+ #include <drm/drm_edid.h>
+ 
++#include "cec-priv.h"
++
+ struct cec_notifier {
+ 	struct mutex lock;
+ 	struct list_head head;
+@@ -28,11 +31,25 @@ struct cec_notifier {
+ 	void (*callback)(struct cec_adapter *adap, u16 pa);
+ 
+ 	u16 phys_addr;
++	struct delayed_work work;
+ };
+ 
+ static LIST_HEAD(cec_notifiers);
+ static DEFINE_MUTEX(cec_notifiers_lock);
+ 
++static void cec_notifier_delayed_work(struct work_struct *work)
++{
++	struct cec_notifier *n =
++		container_of(to_delayed_work(work), struct cec_notifier, work);
++
++	mutex_lock(&n->lock);
++	if (n->callback)
++		n->callback(n->cec_adap, n->phys_addr);
++	else if (n->cec_adap)
++		cec_s_phys_addr(n->cec_adap, n->phys_addr, false);
++	mutex_unlock(&n->lock);
++}
++
+ struct cec_notifier *
+ cec_notifier_get_conn(struct device *hdmi_dev, const char *conn_name)
+ {
+@@ -62,6 +79,7 @@ cec_notifier_get_conn(struct device *hdmi_dev, const char *conn_name)
+ 	}
+ 	n->phys_addr = CEC_PHYS_ADDR_INVALID;
+ 
++	INIT_DELAYED_WORK(&n->work, cec_notifier_delayed_work);
+ 	mutex_init(&n->lock);
+ 	kref_init(&n->kref);
+ 	list_add_tail(&n->head, &cec_notifiers);
+@@ -172,9 +190,12 @@ void cec_notifier_set_phys_addr(struct cec_notifier *n, u16 pa)
+ 	if (n == NULL)
+ 		return;
+ 
++	cancel_delayed_work_sync(&n->work);
+ 	mutex_lock(&n->lock);
+ 	n->phys_addr = pa;
+-	if (n->callback)
++	if (cec_debounce > 0 && pa == CEC_PHYS_ADDR_INVALID)
++		schedule_delayed_work(&n->work, msecs_to_jiffies(cec_debounce));
++	else if (n->callback)
+ 		n->callback(n->cec_adap, n->phys_addr);
+ 	else if (n->cec_adap)
+ 		cec_s_phys_addr(n->cec_adap, n->phys_addr, false);
+diff --git a/drivers/media/cec/cec-priv.h b/drivers/media/cec/cec-priv.h
+index 7bdf855aaecd..65176294fcf0 100644
+--- a/drivers/media/cec/cec-priv.h
++++ b/drivers/media/cec/cec-priv.h
+@@ -27,6 +27,7 @@ static inline bool msg_is_raw(const struct cec_msg *msg)
+ 
+ /* cec-core.c */
+ extern int cec_debug;
++extern int cec_debounce;
+ int cec_get_device(struct cec_devnode *devnode);
+ void cec_put_device(struct cec_devnode *devnode);
+ 

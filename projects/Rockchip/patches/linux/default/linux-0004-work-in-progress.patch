@@ -1,0 +1,1082 @@
+From 5bc31cbaf29ebfdd55d9e903bd0ba652e46956c1 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Tue, 26 Feb 2019 20:45:14 +0000
+Subject: [PATCH] WIP: dw-hdmi-cec: sleep 100ms on error
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ drivers/gpu/drm/bridge/synopsys/dw-hdmi-cec.c | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/bridge/synopsys/dw-hdmi-cec.c b/drivers/gpu/drm/bridge/synopsys/dw-hdmi-cec.c
+index ac1e001d0882..f454b04b5694 100644
+--- a/drivers/gpu/drm/bridge/synopsys/dw-hdmi-cec.c
++++ b/drivers/gpu/drm/bridge/synopsys/dw-hdmi-cec.c
+@@ -4,6 +4,7 @@
+  *
+  * Copyright (C) 2015-2017 Russell King.
+  */
++#include <linux/delay.h>
+ #include <linux/interrupt.h>
+ #include <linux/io.h>
+ #include <linux/module.h>
+@@ -129,8 +130,15 @@ static irqreturn_t dw_hdmi_cec_hardirq(int irq, void *data)
+ 
+ 	dw_hdmi_write(cec, stat, HDMI_IH_CEC_STAT0);
+ 
+-	if (stat & CEC_STAT_ERROR_INIT) {
+-		cec->tx_status = CEC_TX_STATUS_ERROR;
++	/* Status with both done and error_initiator bits have been seen
++	 * on Rockchip RK3328 devices, transmit attempt seems to have failed
++	 * when this happens, report as low drive and block cec-framework
++	 * 100ms before core retransmits the failed message, this seems to
++	 * mitigate the issue with failed transmit attempts.
++	 */
++	if ((stat & (CEC_STAT_DONE|CEC_STAT_ERROR_INIT)) == (CEC_STAT_DONE|CEC_STAT_ERROR_INIT)) {
++		pr_info("dw_hdmi_cec_hardirq: stat=%02x LOW_DRIVE\n", stat);
++		cec->tx_status = CEC_TX_STATUS_LOW_DRIVE;
+ 		cec->tx_done = true;
+ 		ret = IRQ_WAKE_THREAD;
+ 	} else if (stat & CEC_STAT_DONE) {
+@@ -141,6 +149,10 @@ static irqreturn_t dw_hdmi_cec_hardirq(int irq, void *data)
+ 		cec->tx_status = CEC_TX_STATUS_NACK;
+ 		cec->tx_done = true;
+ 		ret = IRQ_WAKE_THREAD;
++	} else if (stat & CEC_STAT_ERROR_INIT) {
++		cec->tx_status = CEC_TX_STATUS_ERROR;
++		cec->tx_done = true;
++		ret = IRQ_WAKE_THREAD;
+ 	}
+ 
+ 	if (stat & CEC_STAT_EOM) {
+@@ -173,6 +185,8 @@ static irqreturn_t dw_hdmi_cec_thread(int irq, void *data)
+ 
+ 	if (cec->tx_done) {
+ 		cec->tx_done = false;
++		if (cec->tx_status == CEC_TX_STATUS_LOW_DRIVE)
++			msleep(100);
+ 		cec_transmit_attempt_done(adap, cec->tx_status);
+ 	}
+ 	if (cec->rx_done) {
+
+From 2774e12fe6526d25e5444f0e19a3b789f6ed4a9d Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 10 Mar 2019 19:18:36 +0000
+Subject: [PATCH] arm64: dts: rockchip: remove dc_12v regulator on
+ rk3328-roc-cc
+
+Remove unnecessary dc_12v regulator node on ROC-RK3328-CC,
+the device uses 5v micro-usb as power input.
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts | 10 ----------
+ 1 file changed, 10 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+index bb40c163b05d..919d4d59f2bb 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+@@ -21,15 +21,6 @@
+ 		#clock-cells = <0>;
+ 	};
+ 
+-	dc_12v: dc-12v {
+-		compatible = "regulator-fixed";
+-		regulator-name = "dc_12v";
+-		regulator-always-on;
+-		regulator-boot-on;
+-		regulator-min-microvolt = <12000000>;
+-		regulator-max-microvolt = <12000000>;
+-	};
+-
+ 	vcc_sd: sdmmc-regulator {
+ 		compatible = "regulator-fixed";
+ 		gpio = <&gpio0 RK_PD6 GPIO_ACTIVE_LOW>;
+@@ -72,7 +63,6 @@
+ 		regulator-boot-on;
+ 		regulator-min-microvolt = <5000000>;
+ 		regulator-max-microvolt = <5000000>;
+-		vin-supply = <&dc_12v>;
+ 	};
+ 
+ 	vcc_phy: vcc-phy-regulator {
+
+From 07f7bb69c89c4cb59bd7784811f705a35adb1c2d Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 10 Mar 2019 19:23:58 +0000
+Subject: [PATCH] arm64: dts: rockchip: add ir-receiver node on rk3328-roc-cc
+
+Add ir-receiver node to enable on-board IR on ROC-RK3328-CC.
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+index 919d4d59f2bb..35c820c4ca79 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+@@ -72,6 +72,13 @@
+ 		regulator-boot-on;
+ 	};
+ 
++	ir-receiver {
++		compatible = "gpio-ir-receiver";
++		gpios = <&gpio2 RK_PA2 GPIO_ACTIVE_LOW>;
++		pinctrl-0 = <&ir_int>;
++		pinctrl-names = "default";
++	};
++
+ 	leds {
+ 		compatible = "gpio-leds";
+ 
+@@ -272,6 +279,12 @@
+ };
+ 
+ &pinctrl {
++	ir {
++		ir_int: ir-int {
++			rockchip,pins = <2 RK_PA2 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++
+ 	pmic {
+ 		pmic_int_l: pmic-int-l {
+ 			rockchip,pins = <1 RK_PD0 RK_FUNC_GPIO &pcfg_pull_up>;
+
+From 1adff9e68eccd2b7203878bbad842070459933bc Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 24 Mar 2019 11:20:51 +0000
+Subject: [PATCH] arm64: dts: rockchip: set tshut mode and priority on
+ rk3328-roc-cc
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+index 35c820c4ca79..753dc898358f 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+@@ -316,6 +316,8 @@
+ };
+ 
+ &tsadc {
++	rockchip,hw-tshut-mode = <0>;
++	rockchip,hw-tshut-polarity = <0>;
+ 	status = "okay";
+ };
+ 
+
+From f637e052d122c86df3220162569e216f10cd103e Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 24 Mar 2019 11:22:06 +0000
+Subject: [PATCH] arm64: dts: rockchip: rename vcc_sdio regulator on
+ rk3328-roc-cc
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+index 753dc898358f..7675e14776ea 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+@@ -32,12 +32,12 @@
+ 		vin-supply = <&vcc_io>;
+ 	};
+ 
+-	vcc_sdio: sdmmcio-regulator {
++	vccio_sd: sdmmcio-regulator {
+ 		compatible = "regulator-gpio";
+ 		gpios = <&grf_gpio 0 GPIO_ACTIVE_HIGH>;
+ 		states = <1800000 0x1
+ 			  3300000 0x0>;
+-		regulator-name = "vcc_sdio";
++		regulator-name = "vccio_sd";
+ 		regulator-type = "voltage";
+ 		regulator-min-microvolt = <1800000>;
+ 		regulator-max-microvolt = <3300000>;
+@@ -271,7 +271,7 @@
+ 
+ 	vccio1-supply = <&vcc_io>;
+ 	vccio2-supply = <&vcc18_emmc>;
+-	vccio3-supply = <&vcc_sdio>;
++	vccio3-supply = <&vccio_sd>;
+ 	vccio4-supply = <&vcc_18>;
+ 	vccio5-supply = <&vcc_io>;
+ 	vccio6-supply = <&vcc_io>;
+@@ -311,7 +311,7 @@
+ 	sd-uhs-sdr50;
+ 	sd-uhs-sdr104;
+ 	vmmc-supply = <&vcc_sd>;
+-	vqmmc-supply = <&vcc_sdio>;
++	vqmmc-supply = <&vccio_sd>;
+ 	status = "okay";
+ };
+ 
+
+From 2c3fb9519bbb4fc0b6a1c49cab02590457a74bcd Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 24 Mar 2019 11:23:10 +0000
+Subject: [PATCH] arm64: dts: rockchip: disable sd uhs support on rk3328-roc-cc
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts | 7 +------
+ 1 file changed, 1 insertion(+), 6 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+index 7675e14776ea..8a4769b0e1f9 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+@@ -92,7 +92,7 @@
+ 
+ 		user {
+ 			label = "firefly:yellow:user";
+-			linux,default-trigger = "mmc1";
++			linux,default-trigger = "mmc0";
+ 			gpios = <&rk805 0 GPIO_ACTIVE_LOW>;
+ 			default-state = "off";
+ 			mode = <0x05>;
+@@ -306,12 +306,7 @@
+ 	max-frequency = <150000000>;
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&sdmmc0_clk &sdmmc0_cmd &sdmmc0_dectn &sdmmc0_bus4>;
+-	sd-uhs-sdr12;
+-	sd-uhs-sdr25;
+-	sd-uhs-sdr50;
+-	sd-uhs-sdr104;
+ 	vmmc-supply = <&vcc_sd>;
+-	vqmmc-supply = <&vccio_sd>;
+ 	status = "okay";
+ };
+ 
+
+From a1807a76fc38fa0cfeef0f104b6244468563e8d7 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 24 Mar 2019 17:18:39 +0000
+Subject: [PATCH] arm64: dts: rockchip: use recommended regulator limits on
+ rk3328-roc-cc
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+index 8a4769b0e1f9..fc41e3d21b0d 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+@@ -184,8 +184,9 @@
+ 		regulators {
+ 			vdd_logic: DCDC_REG1 {
+ 				regulator-name = "vdd_logic";
+-				regulator-min-microvolt = <712500>;
+-				regulator-max-microvolt = <1450000>;
++				regulator-min-microvolt = <900000>;
++				regulator-max-microvolt = <1150000>;
++				regulator-ramp-delay = <12500>;
+ 				regulator-always-on;
+ 				regulator-boot-on;
+ 				regulator-state-mem {
+@@ -196,8 +197,9 @@
+ 
+ 			vdd_arm: DCDC_REG2 {
+ 				regulator-name = "vdd_arm";
+-				regulator-min-microvolt = <712500>;
+-				regulator-max-microvolt = <1450000>;
++				regulator-min-microvolt = <950000>;
++				regulator-max-microvolt = <1350000>;
++				regulator-ramp-delay = <12500>;
+ 				regulator-always-on;
+ 				regulator-boot-on;
+ 				regulator-state-mem {
+
+From fe0a077e022481c099dabc34622f3da8c4225671 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 21 Apr 2019 10:28:27 +0000
+Subject: [PATCH] arm64: dts: rockchip: use recommended regulator limits on
+ rk3328-rock64
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ arch/arm64/boot/dts/rockchip/rk3328-rock64.dts | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3328-rock64.dts b/arch/arm64/boot/dts/rockchip/rk3328-rock64.dts
+index 7acc2935899a..bddaaf3e9480 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3328-rock64.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3328-rock64.dts
+@@ -200,8 +200,8 @@
+ 		regulators {
+ 			vdd_logic: DCDC_REG1 {
+ 				regulator-name = "vdd_logic";
+-				regulator-min-microvolt = <712500>;
+-				regulator-max-microvolt = <1450000>;
++				regulator-min-microvolt = <900000>;
++				regulator-max-microvolt = <1150000>;
+ 				regulator-ramp-delay = <12500>;
+ 				regulator-always-on;
+ 				regulator-boot-on;
+@@ -213,8 +213,8 @@
+ 
+ 			vdd_arm: DCDC_REG2 {
+ 				regulator-name = "vdd_arm";
+-				regulator-min-microvolt = <712500>;
+-				regulator-max-microvolt = <1450000>;
++				regulator-min-microvolt = <950000>;
++				regulator-max-microvolt = <1350000>;
+ 				regulator-ramp-delay = <12500>;
+ 				regulator-always-on;
+ 				regulator-boot-on;
+
+From 883329f8d4898e33908d6430857b126adb90543b Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 17 Mar 2019 22:38:09 +0000
+Subject: [PATCH] arm64: dts: rockchip: update gpu node on rk3328
+
+---
+ arch/arm64/boot/dts/rockchip/rk3328.dtsi | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3328.dtsi b/arch/arm64/boot/dts/rockchip/rk3328.dtsi
+index 31cc1541f1f5..d2a97ed113d7 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3328.dtsi
++++ b/arch/arm64/boot/dts/rockchip/rk3328.dtsi
+@@ -270,6 +270,10 @@
+ 			#address-cells = <1>;
+ 			#size-cells = <0>;
+ 
++			pd_gpu@RK3328_PD_GPU {
++				reg = <RK3328_PD_GPU>;
++				clocks = <&cru ACLK_GPU>;
++			};
+ 			pd_hevc@RK3328_PD_HEVC {
+ 				reg = <RK3328_PD_HEVC>;
+ 			};
+@@ -572,6 +576,7 @@
+ 				  "ppmmu1";
+ 		clocks = <&cru ACLK_GPU>, <&cru ACLK_GPU>;
+ 		clock-names = "bus", "core";
++		power-domains = <&power RK3328_PD_GPU>;
+ 		resets = <&cru SRST_GPU_A>;
+ 	};
+ 
+@@ -744,6 +749,7 @@
+ 			<&cru ACLK_BUS_PRE>, <&cru HCLK_BUS_PRE>,
+ 			<&cru PCLK_BUS_PRE>, <&cru ACLK_PERI_PRE>,
+ 			<&cru HCLK_PERI>, <&cru PCLK_PERI>,
++			<&cru ACLK_GPU>,
+ 			<&cru SCLK_RTC32K>;
+ 		assigned-clock-parents =
+ 			<&cru HDMIPHY>, <&cru PLL_APLL>,
+@@ -765,6 +771,7 @@
+ 			<150000000>, <75000000>,
+ 			<75000000>, <150000000>,
+ 			<75000000>, <75000000>,
++			<500000000>,
+ 			<32768>;
+ 	};
+ 
+
+From c3aae0bd4e46dbac23008b1d754b8f02eef7ebde Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 14 Apr 2019 21:25:11 +0000
+Subject: [PATCH] arm64: dts: rockchip: Enable HDMI audio on rk3399-nanopi4
+
+---
+ arch/arm64/boot/dts/rockchip/rk3399-nanopi4.dtsi | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3399-nanopi4.dtsi b/arch/arm64/boot/dts/rockchip/rk3399-nanopi4.dtsi
+index dd16c80d923e..5faff43d2d57 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3399-nanopi4.dtsi
++++ b/arch/arm64/boot/dts/rockchip/rk3399-nanopi4.dtsi
+@@ -184,6 +184,10 @@
+ 	status = "okay";
+ };
+ 
++&hdmi_sound {
++	status = "okay";
++};
++
+ &i2c0 {
+ 	clock-frequency = <400000>;
+ 	i2c-scl-rising-time-ns = <160>;
+@@ -459,6 +463,10 @@
+ 	status = "okay";
+ };
+ 
++&i2s2 {
++        status = "okay";
++};
++
+ &io_domains {
+ 	bt656-supply = <&vcc_1v8>;
+ 	audio-supply = <&vcca1v8_codec>;
+
+From 8ad710561309cb6cc8a7309ad3f0b03411f65846 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 14 Apr 2019 21:25:34 +0000
+Subject: [PATCH] arm64: dts: rockchip: Fix HDMI audio on rk3399-orangepi
+
+---
+ arch/arm64/boot/dts/rockchip/rk3399-orangepi.dts | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3399-orangepi.dts b/arch/arm64/boot/dts/rockchip/rk3399-orangepi.dts
+index 0541dfce924d..6b0034b72300 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3399-orangepi.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3399-orangepi.dts
+@@ -517,6 +517,10 @@
+ 	};
+ };
+ 
++&i2s2 {
++        status = "okay";
++};
++
+ &io_domains {
+ 	status = "okay";
+ 	bt656-supply = <&vcc_3v0>;
+
+From 6e68ec9b6040269284100e35e40d7ff5f54e900e Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 14 Apr 2019 21:26:34 +0000
+Subject: [PATCH] arm64: dts: rockchip: Enable HDMI audio on rk3399-roc-pc
+
+---
+ arch/arm64/boot/dts/rockchip/rk3399-roc-pc.dts | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3399-roc-pc.dts b/arch/arm64/boot/dts/rockchip/rk3399-roc-pc.dts
+index 19f7732d728c..b5bbd4be881f 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3399-roc-pc.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3399-roc-pc.dts
+@@ -184,6 +184,10 @@
+ 	status = "okay";
+ };
+ 
++&hdmi_sound {
++	status = "okay";
++};
++
+ &i2c0 {
+ 	clock-frequency = <400000>;
+ 	i2c-scl-rising-time-ns = <168>;
+
+From c84039857dc2774ed9b4a68453fa900802d534f9 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 14 Apr 2019 21:27:20 +0000
+Subject: [PATCH] arm64: dts: rockchip: Enable gpu node on rk3399-roc-pc
+
+---
+ arch/arm64/boot/dts/rockchip/rk3399-roc-pc.dts | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3399-roc-pc.dts b/arch/arm64/boot/dts/rockchip/rk3399-roc-pc.dts
+index b5bbd4be881f..8af27b36737d 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3399-roc-pc.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3399-roc-pc.dts
+@@ -188,6 +188,11 @@
+ 	status = "okay";
+ };
+ 
++&gpu {
++	mali-supply = <&vdd_gpu>;
++	status = "okay";
++};
++
+ &i2c0 {
+ 	clock-frequency = <400000>;
+ 	i2c-scl-rising-time-ns = <168>;
+
+From e047b542afed39d7c88b0cdda1e5aa6db0befb17 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Tue, 19 Mar 2019 22:18:47 +0000
+Subject: [PATCH] arm64: dts: rockchip: add sound node on rk3328-roc-cc
+
+---
+ arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts | 70 ++++++++++++++++++++++++++
+ 1 file changed, 70 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+index fc41e3d21b0d..0d7a02e16054 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+@@ -98,6 +98,35 @@
+ 			mode = <0x05>;
+ 		};
+ 	};
++
++	sound {
++		compatible = "audio-graph-card";
++		label = "rockchip,rk3328";
++		dais = <&i2s0_p0
++			&i2s1_p0
++			&spdif_p0>;
++	};
++
++	spdif-dit {
++		compatible = "linux,spdif-dit";
++		#sound-dai-cells = <0>;
++
++		port {
++			dit_p0_0: endpoint {
++				remote-endpoint = <&spdif_p0_0>;
++			};
++		};
++	};
++};
++
++&codec {
++	status = "okay";
++
++	port@0 {
++		codec_p0_0: endpoint {
++			remote-endpoint = <&i2s1_p0_0>;
++		};
++	};
+ };
+ 
+ &cpu0 {
+@@ -151,6 +180,12 @@
+ 
+ &hdmi {
+ 	status = "okay";
++
++	port@0 {
++		hdmi_p0_0: endpoint {
++			remote-endpoint = <&i2s0_p0_0>;
++		};
++	};
+ };
+ 
+ &hdmiphy {
+@@ -268,6 +303,30 @@
+ 	};
+ };
+ 
++&i2s0 {
++	status = "okay";
++
++	i2s0_p0: port {
++		i2s0_p0_0: endpoint {
++			dai-format = "i2s";
++			mclk-fs = <256>;
++			remote-endpoint = <&hdmi_p0_0>;
++		};
++	};
++};
++
++&i2s1 {
++	status = "okay";
++
++	i2s1_p0: port {
++		i2s1_p0_0: endpoint {
++			dai-format = "i2s";
++			mclk-fs = <256>;
++			remote-endpoint = <&codec_p0_0>;
++		};
++	};
++};
++
+ &io_domains {
+ 	status = "okay";
+ 
+@@ -312,6 +371,17 @@
+ 	status = "okay";
+ };
+ 
++&spdif {
++	pinctrl-0 = <&spdifm0_tx>;
++	status = "okay";
++
++	spdif_p0: port {
++		spdif_p0_0: endpoint {
++			remote-endpoint = <&dit_p0_0>;
++		};
++	};
++};
++
+ &tsadc {
+ 	rockchip,hw-tshut-mode = <0>;
+ 	rockchip,hw-tshut-polarity = <0>;
+
+From 6187751f94c0ea676d22850694737a7c0dc9ea36 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Thu, 7 Feb 2019 22:05:29 +0000
+Subject: [PATCH] ARM: dts: rockchip: enable sd ultra-high speeds on
+ rk3288-tinker
+
+---
+ arch/arm/boot/dts/rk3288-tinker.dtsi | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/arch/arm/boot/dts/rk3288-tinker.dtsi b/arch/arm/boot/dts/rk3288-tinker.dtsi
+index 81e4e953d4a4..39e7de4af9bd 100644
+--- a/arch/arm/boot/dts/rk3288-tinker.dtsi
++++ b/arch/arm/boot/dts/rk3288-tinker.dtsi
+@@ -454,6 +454,10 @@
+ 	disable-wp;			/* wp not hooked up */
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&sdmmc_clk &sdmmc_cmd &sdmmc_cd &sdmmc_bus4>;
++	sd-uhs-sdr12;
++	sd-uhs-sdr25;
++	sd-uhs-sdr50;
++	sd-uhs-sdr104;
+ 	status = "okay";
+ 	vmmc-supply = <&vcc33_sd>;
+ 	vqmmc-supply = <&vccio_sd>;
+
+From a04e64bc0e7201d50758ae04a7b6e3e57b8a6a0f Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 24 Mar 2019 11:23:55 +0000
+Subject: [PATCH] arm64: dts: rockchip: fix vccio4-supply on rk3328-roc-cc
+
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+index 0d7a02e16054..77ee6a901dc2 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+@@ -333,7 +333,7 @@
+ 	vccio1-supply = <&vcc_io>;
+ 	vccio2-supply = <&vcc18_emmc>;
+ 	vccio3-supply = <&vccio_sd>;
+-	vccio4-supply = <&vcc_18>;
++	vccio4-supply = <&vcc_io>;
+ 	vccio5-supply = <&vcc_io>;
+ 	vccio6-supply = <&vcc_io>;
+ 	pmuio-supply = <&vcc_io>;
+
+From 4323d2fde649cbe03ebb1315b8f40059946c7e54 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 21 Apr 2019 18:13:30 +0000
+Subject: [PATCH] arm64: dts: rockchip: fix vccio4-supply on rk3328-rock64
+
+---
+ arch/arm64/boot/dts/rockchip/rk3328-rock64.dts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3328-rock64.dts b/arch/arm64/boot/dts/rockchip/rk3328-rock64.dts
+index bddaaf3e9480..e76bbc27d1ae 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3328-rock64.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3328-rock64.dts
+@@ -314,7 +314,7 @@
+ 	vccio1-supply = <&vcc_io>;
+ 	vccio2-supply = <&vcc18_emmc>;
+ 	vccio3-supply = <&vcc_io>;
+-	vccio4-supply = <&vcc_18>;
++	vccio4-supply = <&vcc_io>;
+ 	vccio5-supply = <&vcc_io>;
+ 	vccio6-supply = <&vcc_io>;
+ 	pmuio-supply = <&vcc_io>;
+
+From 7eb771a885484a63aef26f297b4eaedb79b3767b Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 21 Apr 2019 18:07:33 +0000
+Subject: [PATCH] arm64: dts: rockchip: fix vcc_sd gpio warning on rk3328
+
+---
+ arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts | 2 +-
+ arch/arm64/boot/dts/rockchip/rk3328-rock64.dts | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+index 77ee6a901dc2..07bcb01030f4 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3328-roc-cc.dts
+@@ -23,7 +23,7 @@
+ 
+ 	vcc_sd: sdmmc-regulator {
+ 		compatible = "regulator-fixed";
+-		gpio = <&gpio0 RK_PD6 GPIO_ACTIVE_LOW>;
++		gpio = <&gpio0 RK_PD6 GPIO_ACTIVE_HIGH>;
+ 		pinctrl-names = "default";
+ 		pinctrl-0 = <&sdmmc0m1_gpio>;
+ 		regulator-name = "vcc_sd";
+diff --git a/arch/arm64/boot/dts/rockchip/rk3328-rock64.dts b/arch/arm64/boot/dts/rockchip/rk3328-rock64.dts
+index e76bbc27d1ae..dda9af15ef6f 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3328-rock64.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3328-rock64.dts
+@@ -23,7 +23,7 @@
+ 
+ 	vcc_sd: sdmmc-regulator {
+ 		compatible = "regulator-fixed";
+-		gpio = <&gpio0 RK_PD6 GPIO_ACTIVE_LOW>;
++		gpio = <&gpio0 RK_PD6 GPIO_ACTIVE_HIGH>;
+ 		pinctrl-names = "default";
+ 		pinctrl-0 = <&sdmmc0m1_gpio>;
+ 		regulator-name = "vcc_sd";
+
+From ddd78009db3e7e49b5f47f6ed6c85f670410e9d2 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 12 May 2019 12:40:00 +0000
+Subject: [PATCH] arm64: dts: rockchip: add rk3328-rockbox
+
+---
+ arch/arm64/boot/dts/rockchip/rk3328-rockbox.dts | 346 ++++++++++++++++++++++++
+ 1 file changed, 346 insertions(+)
+ create mode 100644 arch/arm64/boot/dts/rockchip/rk3328-rockbox.dts
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3328-rockbox.dts b/arch/arm64/boot/dts/rockchip/rk3328-rockbox.dts
+new file mode 100644
+index 000000000000..e86a64e1a26c
+--- /dev/null
++++ b/arch/arm64/boot/dts/rockchip/rk3328-rockbox.dts
+@@ -0,0 +1,346 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright (c) 2017 PINE64
++ */
++
++/dts-v1/;
++#include "rk3328.dtsi"
++
++/ {
++	model = "Popcorn Hour RockBox Basic";
++	compatible = "popcornhour,rockbox", "rockchip,rk3328";
++
++	chosen {
++		stdout-path = "serial2:1500000n8";
++	};
++
++	vcc_sd: sdmmc-regulator {
++		compatible = "regulator-fixed";
++		gpio = <&gpio0 RK_PD6 GPIO_ACTIVE_HIGH>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&sdmmc0m1_gpio>;
++		regulator-name = "vcc_sd";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		vin-supply = <&vcc_io>;
++	};
++
++	vcc_host_5v: vcc_host1_5v: vcc_otg_5v: vcc-host-5v-regulator {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc_host_5v";
++		regulator-always-on;
++		regulator-boot-on;
++		vin-supply = <&vcc_sys>;
++	};
++
++	vcc_sys: vcc-sys {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc_sys";
++		regulator-always-on;
++		regulator-boot-on;
++		regulator-min-microvolt = <5000000>;
++		regulator-max-microvolt = <5000000>;
++	};
++
++	ir-receiver {
++		compatible = "gpio-ir-receiver";
++		gpios = <&gpio2 RK_PA2 GPIO_ACTIVE_LOW>;
++		pinctrl-0 = <&ir_int>;
++		pinctrl-names = "default";
++	};
++
++	leds {
++		compatible = "gpio-leds";
++
++		power {
++			gpios = <&rk805 0 GPIO_ACTIVE_HIGH>;
++			linux,default-trigger = "default-on";
++			default-state = "on";
++		};
++	};
++
++	sound {
++		compatible = "audio-graph-card";
++		label = "rockchip,rk3328";
++		dais = <&i2s0_p0
++			&spdif_p0>;
++	};
++
++	spdif-dit {
++		compatible = "linux,spdif-dit";
++		#sound-dai-cells = <0>;
++
++		port {
++			dit_p0_0: endpoint {
++				remote-endpoint = <&spdif_p0_0>;
++			};
++		};
++	};
++};
++
++&cpu0 {
++	cpu-supply = <&vdd_arm>;
++};
++
++&cpu1 {
++	cpu-supply = <&vdd_arm>;
++};
++
++&cpu2 {
++	cpu-supply = <&vdd_arm>;
++};
++
++&cpu3 {
++	cpu-supply = <&vdd_arm>;
++};
++
++&emmc {
++	bus-width = <8>;
++	cap-mmc-highspeed;
++	mmc-hs200-1_8v;
++	non-removable;
++	pinctrl-names = "default";
++	pinctrl-0 = <&emmc_clk &emmc_cmd &emmc_bus8>;
++	vmmc-supply = <&vcc_io>;
++	vqmmc-supply = <&vcc18_emmc>;
++	status = "okay";
++};
++
++&gmac2phy {
++	assigned-clocks = <&cru SCLK_MAC2PHY_SRC>;
++	assigned-clock-rate = <50000000>;
++	assigned-clocks = <&cru SCLK_MAC2PHY>;
++	assigned-clock-parents = <&cru SCLK_MAC2PHY_SRC>;
++	clock_in_out = "output";
++	phy-supply = <&vcc_io>;
++	status = "okay";
++};
++
++&hdmi {
++	status = "okay";
++
++	port@0 {
++		hdmi_p0_0: endpoint {
++			remote-endpoint = <&i2s0_p0_0>;
++		};
++	};
++};
++
++&hdmiphy {
++	status = "okay";
++};
++
++&i2c1 {
++	status = "okay";
++
++	rk805: rk805@18 {
++		compatible = "rockchip,rk805";
++		reg = <0x18>;
++		interrupt-parent = <&gpio2>;
++		interrupts = <6 IRQ_TYPE_LEVEL_LOW>;
++		#clock-cells = <1>;
++		clock-output-names = "xin32k", "rk805-clkout2";
++		gpio-controller;
++		#gpio-cells = <2>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&pmic_int_l>;
++		rockchip,system-power-controller;
++		wakeup-source;
++
++		vcc1-supply = <&vcc_sys>;
++		vcc2-supply = <&vcc_sys>;
++		vcc3-supply = <&vcc_sys>;
++		vcc4-supply = <&vcc_sys>;
++		vcc5-supply = <&vcc_io>;
++		vcc6-supply = <&vcc_sys>;
++
++		regulators {
++			vdd_logic: DCDC_REG1 {
++				regulator-name = "vdd_logic";
++				regulator-min-microvolt = <900000>;
++				regulator-max-microvolt = <1150000>;
++				regulator-ramp-delay = <12500>;
++				regulator-always-on;
++				regulator-boot-on;
++				regulator-state-mem {
++					regulator-on-in-suspend;
++					regulator-suspend-microvolt = <1000000>;
++				};
++			};
++
++			vdd_arm: DCDC_REG2 {
++				regulator-name = "vdd_arm";
++				regulator-min-microvolt = <950000>;
++				regulator-max-microvolt = <1350000>;
++				regulator-ramp-delay = <12500>;
++				regulator-always-on;
++				regulator-boot-on;
++				regulator-state-mem {
++					regulator-on-in-suspend;
++					regulator-suspend-microvolt = <950000>;
++				};
++			};
++
++			vcc_ddr: DCDC_REG3 {
++				regulator-name = "vcc_ddr";
++				regulator-always-on;
++				regulator-boot-on;
++				regulator-state-mem {
++					regulator-on-in-suspend;
++				};
++			};
++
++			vcc_io: DCDC_REG4 {
++				regulator-name = "vcc_io";
++				regulator-min-microvolt = <3300000>;
++				regulator-max-microvolt = <3300000>;
++				regulator-always-on;
++				regulator-boot-on;
++				regulator-state-mem {
++					regulator-on-in-suspend;
++					regulator-suspend-microvolt = <3300000>;
++				};
++			};
++
++			vcc_18: LDO_REG1 {
++				regulator-name = "vcc_18";
++				regulator-min-microvolt = <1800000>;
++				regulator-max-microvolt = <1800000>;
++				regulator-always-on;
++				regulator-boot-on;
++				regulator-state-mem {
++					regulator-on-in-suspend;
++					regulator-suspend-microvolt = <1800000>;
++				};
++			};
++
++			vcc18_emmc: LDO_REG2 {
++				regulator-name = "vcc18_emmc";
++				regulator-min-microvolt = <1800000>;
++				regulator-max-microvolt = <1800000>;
++				regulator-always-on;
++				regulator-boot-on;
++				regulator-state-mem {
++					regulator-on-in-suspend;
++					regulator-suspend-microvolt = <1800000>;
++				};
++			};
++
++			vdd_10: LDO_REG3 {
++				regulator-name = "vdd_10";
++				regulator-min-microvolt = <1000000>;
++				regulator-max-microvolt = <1000000>;
++				regulator-always-on;
++				regulator-boot-on;
++				regulator-state-mem {
++					regulator-on-in-suspend;
++					regulator-suspend-microvolt = <1000000>;
++				};
++			};
++		};
++	};
++};
++
++&i2s0 {
++	status = "okay";
++
++	i2s0_p0: port {
++		i2s0_p0_0: endpoint {
++			dai-format = "i2s";
++			mclk-fs = <256>;
++			remote-endpoint = <&hdmi_p0_0>;
++		};
++	};
++};
++
++&io_domains {
++	status = "okay";
++
++	vccio1-supply = <&vcc_io>;
++	vccio2-supply = <&vcc18_emmc>;
++	vccio3-supply = <&vcc_io>;
++	vccio4-supply = <&vcc_io>;
++	vccio5-supply = <&vcc_io>;
++	vccio6-supply = <&vcc_io>;
++	pmuio-supply = <&vcc_io>;
++};
++
++&pinctrl {
++	ir {
++		ir_int: ir-int {
++			rockchip,pins = <2 RK_PA2 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++
++	pmic {
++		pmic_int_l: pmic-int-l {
++			rockchip,pins = <2 RK_PA6 RK_FUNC_GPIO &pcfg_pull_up>;
++		};
++	};
++};
++
++&sdmmc {
++	bus-width = <4>;
++	cap-mmc-highspeed;
++	cap-sd-highspeed;
++	disable-wp;
++	max-frequency = <150000000>;
++	pinctrl-names = "default";
++	pinctrl-0 = <&sdmmc0_clk &sdmmc0_cmd &sdmmc0_dectn &sdmmc0_bus4>;
++	vmmc-supply = <&vcc_sd>;
++	status = "okay";
++};
++
++&spdif {
++	pinctrl-0 = <&spdifm0_tx>;
++	status = "okay";
++
++	spdif_p0: port {
++		spdif_p0_0: endpoint {
++			remote-endpoint = <&dit_p0_0>;
++		};
++	};
++};
++
++&tsadc {
++	rockchip,hw-tshut-mode = <0>;
++	rockchip,hw-tshut-polarity = <0>;
++	status = "okay";
++};
++
++&uart2 {
++	status = "okay";
++};
++
++&u2phy {
++	status = "okay";
++};
++
++&u2phy_host {
++	status = "okay";
++};
++
++&u2phy_otg {
++	status = "okay";
++};
++
++&usb20_otg {
++	dr_mode = "host";
++	status = "okay";
++};
++
++&usb_host0_ehci {
++	status = "okay";
++};
++
++&usb_host0_ohci {
++	status = "okay";
++};
++
++&vop {
++	status = "okay";
++};
++
++&vop_mmu {
++	status = "okay";
++};
