@@ -24,6 +24,12 @@ case "$DEVICE" in
     PKG_URL="https://github.com/BayLibre/u-boot/archive/$PKG_VERSION.tar.gz"
     PKG_SHA256="0ae5fd97ba86fcd6cc7b2722580745a0ddbf651ffa0cc0bd188a05a9b668373f"
     ;;
+  "NanoPi_K2")
+    PKG_VERSION="4ef665f"
+    PKG_URL="https://github.com/friendlyarm/u-boot/archive/$PKG_VERSION.tar.gz"
+    PKG_SHA256="8df38aef6624a815909ccae294564570d8723a01e4b1589e146ffa013dea14a6"
+    PKG_DEPENDS_TARGET="arm-cortexa9-linux-gnueabihf:host gcc-linaro-aarch64-linux-gnu:host"
+    ;;
   *)
     PKG_TOOLCHAIN="manual"
     ;;
@@ -39,10 +45,17 @@ post_unpack() {
 make_target() {
   if [ -n "$PKG_URL" ]; then
     [ "${BUILD_WITH_DEBUG}" = "yes" ] && PKG_DEBUG=1 || PKG_DEBUG=0
-    export PATH=$TOOLCHAIN/lib/gcc-linaro-aarch64-elf/bin/:$TOOLCHAIN/lib/gcc-linaro-arm-eabi/bin/:$PATH
-    DEBUG=${PKG_DEBUG} CROSS_COMPILE=aarch64-elf- ARCH=arm CFLAGS="" LDFLAGS="" make mrproper
-    DEBUG=${PKG_DEBUG} CROSS_COMPILE=aarch64-elf- ARCH=arm CFLAGS="" LDFLAGS="" make $UBOOT_CONFIG
-    DEBUG=${PKG_DEBUG} CROSS_COMPILE=aarch64-elf- ARCH=arm CFLAGS="" LDFLAGS="" make HOSTCC="$HOST_CC" HOSTSTRIP="true"
+    if [ "$DEVICE" = "NanoPi_K2" ]; then
+      export PATH=$TOOLCHAIN/lib/arm-cortexa9-linux-gnueabihf/bin/:$TOOLCHAIN/lib/gcc-linaro-aarch64-linux-gnu/bin/:$PATH
+      DEBUG=${PKG_DEBUG} make mrproper
+      DEBUG=${PKG_DEBUG} make $UBOOT_CONFIG
+      DEBUG=${PKG_DEBUG} CFLAGS="" LDFLAGS="" make
+    else
+      export PATH=$TOOLCHAIN/lib/gcc-linaro-aarch64-elf/bin/:$TOOLCHAIN/lib/gcc-linaro-arm-eabi/bin/:$PATH
+      DEBUG=${PKG_DEBUG} CROSS_COMPILE=aarch64-elf- ARCH=arm CFLAGS="" LDFLAGS="" make mrproper
+      DEBUG=${PKG_DEBUG} CROSS_COMPILE=aarch64-elf- ARCH=arm CFLAGS="" LDFLAGS="" make $UBOOT_CONFIG
+      DEBUG=${PKG_DEBUG} CROSS_COMPILE=aarch64-elf- ARCH=arm CFLAGS="" LDFLAGS="" make HOSTCC="$HOST_CC" HOSTSTRIP="true"
+    fi
   fi
 }
 
@@ -71,6 +84,9 @@ makeinstall_target() {
         ;;
       "KVIM"*|"LePotato")
         cp -av $PKG_BUILD/fip/u-boot.bin.sd.bin $INSTALL/usr/share/bootloader/u-boot
+        ;;
+      "NanoPi_K2")
+        cp -av $PKG_BUILD/fip/gxb/u-boot.bin $INSTALL/usr/share/bootloader/u-boot
         ;;
     esac
 }

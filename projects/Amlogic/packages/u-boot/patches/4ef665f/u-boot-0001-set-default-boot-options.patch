@@ -1,0 +1,55 @@
+diff --git a/board/amlogic/configs/nanopi-k2.h b/board/amlogic/configs/nanopi-k2.h
+index 387cd349aa..27c0d3ab93 100644
+--- a/board/amlogic/configs/nanopi-k2.h
++++ b/board/amlogic/configs/nanopi-k2.h
+@@ -124,40 +124,26 @@
+ 	"hdmimode=1080p60hz\0" \
+ 	"cvbsmode=576cvbs\0" \
+ 	"serial#=fe2017a905b20003\0" \
+-	"initrd_high=0x40000000\0" \
+-	"initrd_start=0x39000000\0" \
+-	"initrd_size=0x200000\0" \
+-	"initrd_name=ramdisk.img\0" \
+ 	"loadaddr=0x1080000\0" \
+-	"bloader=ext4load mmc 0:1\0" \
++	"bloader=fatload mmc 0\0" \
+ 	"loadkernel=" \
+-		"${bloader} ${loadaddr} Image\0" \
++		"${bloader} ${loadaddr} kernel.img\0" \
+ 	"loaddtb=" \
+-		"${bloader} ${dtb_mem_addr} ${dtb_name}; fdt addr ${dtb_mem_addr}\0" \
+-	"loadinitrd=" \
+-		"${bloader} ${initrd_start} ${initrd_name}; setenv initrd_size 0x${filesize}\0" \
+-	"loadbootimg=" \
+-		"${bloader} 0x20000000 boot.img\0" \
++		"${bloader} ${dtb_mem_addr} dtb.img; fdt addr ${dtb_mem_addr}\0" \
+ 	"consoleargs=" \
+-		"console=ttyS0,115200 no_console_suspend " \
++		"console=tty0 console=ttyS0,115200 no_console_suspend " \
+ 		"earlyprintk=aml-uart,0xc81004c0\0" \
+-	"droidargs=" \
+-		"androidboot.console=ttyS0 androidboot.hardware=nanopi-k2\0" \
+-	/* "rootargs=" \
+-		"root=/dev/mmcblk0p2 rootfstype=ext4 rootwait init=/sbin/init\0" */ \
+ 	"init_bootargs=" \
+-		"setenv bootargs ${consoleargs} ${droidargs} " \
+-		  "hdmimode=${hdmimode} hdmitx=cecf logo=osd1,loaded,${fb_addr},${hdmimode} " \
+-		  "initrd=${initrd_start},${initrd_size}\0" \
+-	"init_display=" \
+-		"osd open; osd clear; ${bloader} 0x20000000 logo.bmp; bmp display 0x20000000\0" \
++		"setenv bootargs ${consoleargs} " \
++		"hdmimode=${hdmimode} hdmitx=cecf " \
++		"BOOT_IMAGE=kernel.img boot=LABEL=LIBREELEC disk=LABEL=STORAGE\0" \
+ 	"bootcmd=" \
+-		"run loadkernel; run loadinitrd; " \
++		"run loadkernel; " \
+ 		"run init_bootargs; " \
+-		"booti ${loadaddr} - ${dtb_mem_addr}\0"
++		"bootm ${loadaddr}\0"
+ 
+ #define CONFIG_PREBOOT  \
+-	"run loaddtb; run init_display"
++	"run loaddtb"
+ #define CONFIG_BOOTCOMMAND
+ 
+ /* Image support */

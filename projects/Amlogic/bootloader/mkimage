@@ -13,8 +13,12 @@ done
 
 if [ -f "$RELEASE_DIR/3rdparty/bootloader/u-boot" ]; then
   echo "Writing u-boot to $(basename $DISK)"
-  dd if="$RELEASE_DIR/3rdparty/bootloader/u-boot" of="$DISK" conv=fsync,notrunc bs=1 count=112 >"$SAVE_ERROR" 2>&1 || show_error
-  dd if="$RELEASE_DIR/3rdparty/bootloader/u-boot" of="$DISK" conv=fsync,notrunc bs=512 skip=1 seek=1 >"$SAVE_ERROR" 2>&1 || show_error
+  if [ "$DEVICE" = "NanoPi_K2" ]; then
+    dd if="$RELEASE_DIR/3rdparty/bootloader/u-boot" of="$DISK" conv=fsync,notrunc bs=512 seek=1 >"$SAVE_ERROR" 2>&1 || show_error
+  else
+    dd if="$RELEASE_DIR/3rdparty/bootloader/u-boot" of="$DISK" conv=fsync,notrunc bs=1 count=112 >"$SAVE_ERROR" 2>&1 || show_error
+    dd if="$RELEASE_DIR/3rdparty/bootloader/u-boot" of="$DISK" conv=fsync,notrunc bs=512 skip=1 seek=1 >"$SAVE_ERROR" 2>&1 || show_error
+  fi
 fi
 
 if [ -f "$RELEASE_DIR/3rdparty/bootloader/boot.ini" ]; then
