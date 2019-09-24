@@ -28,7 +28,7 @@ case "$DEVICE" in
     PKG_VERSION="4ef665f"
     PKG_URL="https://github.com/friendlyarm/u-boot/archive/$PKG_VERSION.tar.gz"
     PKG_SHA256="8df38aef6624a815909ccae294564570d8723a01e4b1589e146ffa013dea14a6"
-    PKG_DEPENDS_TARGET="arm-cortexa9-linux-gnueabihf:host gcc-linaro-aarch64-linux-gnu:host"
+    PKG_DEPENDS_TARGET="toolchain arm-cortexa9-linux-gnueabihf:host gcc-linaro-aarch64-linux-gnu-4.9.4:host"
     ;;
   *)
     PKG_TOOLCHAIN="manual"
@@ -46,7 +46,7 @@ make_target() {
   if [ -n "$PKG_URL" ]; then
     [ "${BUILD_WITH_DEBUG}" = "yes" ] && PKG_DEBUG=1 || PKG_DEBUG=0
     if [ "$DEVICE" = "NanoPi_K2" ]; then
-      export PATH=$TOOLCHAIN/lib/arm-cortexa9-linux-gnueabihf/bin/:$TOOLCHAIN/lib/gcc-linaro-aarch64-linux-gnu/bin/:$PATH
+      export PATH=$TOOLCHAIN/lib/arm-cortexa9-linux-gnueabihf/bin/:$TOOLCHAIN/lib/gcc-linaro-aarch64-linux-gnu-4.9.4/bin/:$PATH
       DEBUG=${PKG_DEBUG} make mrproper
       DEBUG=${PKG_DEBUG} make $UBOOT_CONFIG
       DEBUG=${PKG_DEBUG} CFLAGS="" LDFLAGS="" make
