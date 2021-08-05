@@ -1,8 +1,8 @@
 # To compile from source:
-### git clone https://github.com/xiayang0521/LibreELEC.tv.git
-###cd LibreELEC.tv
-###git checkout 9.0.2-nanopi-k2
-###PROJECT=Amlogic DEVICE=NanoPi_K2 ARCH=arm make image
+#### git clone https://github.com/xiayang0521/LibreELEC.tv.git
+#### cd LibreELEC.tv
+#### git checkout 9.0.2-nanopi-k2
+#### PROJECT=Amlogic DEVICE=NanoPi_K2 ARCH=arm make image
 
 # LibreELEC
 
